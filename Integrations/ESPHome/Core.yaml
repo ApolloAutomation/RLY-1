@@ -35,6 +35,21 @@ switch:
     pin: GPIO4
 
 sensor:
+  - platform: internal_temperature
+    name: "ESP Temperature"
+    id: sys_esp_temperature
+
+  - platform: uptime
+    name: Uptime
+    id: sys_uptime
+    update_interval: 60s
+
+  - platform: wifi_signal
+    name: RSSI
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+    
   - platform: dallas_temp
     name: "Temperature Probe"
     update_interval: 5s
@@ -55,6 +70,26 @@ binary_sensor:
         pulldown: True
     filters:
       - invert:
+  - platform: status
+    name: Online
+    id: ink_ha_connected
+
+  - platform: homeassistant
+    name: "OTA Mode"
+    id: ota_mode
+    entity_id: input_boolean.apollo_ota_mode
+    on_press:
+      then:
+        - lambda: |- 
+            id(deep_sleep_1).prevent_deep_sleep();
+    on_release:  
+      then:
+        - if:
+            condition:
+              switch.is_off: prevent_sleep
+            then:
+              - lambda: |- 
+                  id(deep_sleep_1).allow_deep_sleep();
 
 light:
   - platform: esp32_rmt_led_strip

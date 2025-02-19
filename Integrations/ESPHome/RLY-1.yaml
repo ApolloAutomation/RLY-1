@@ -36,7 +36,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: Firmware Update
-    source: https://apolloautomation.github.io/RLY-1/artifact/manifest.json
+    source: https://apolloautomation.github.io/RLY-1/firmware/manifest.json
 
 wifi:
   on_connect:

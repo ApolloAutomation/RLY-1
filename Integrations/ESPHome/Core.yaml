@@ -1,6 +1,6 @@
 substitutions:
-  name: apollo-plt-1 # TODO: Rename
-  version: "24.8.7.2"
+  name: apollo-rly-1
+  version: "24.9.7.1"
   device_description: ${name} made by Apollo Automation - version ${version}.
 
 esp32:
@@ -24,3 +24,68 @@ captive_portal:
 
 web_server:
   port: 80
+
+one_wire:
+  - platform: gpio
+    pin: GPIO5
+
+switch:
+  - platform: gpio
+    name: "Relay"
+    pin: GPIO4
+
+sensor:
+  - platform: dallas_temp
+    name: "Temperature Probe"
+    update_interval: 5s
+    id: temp_probe
+
+binary_sensor:
+  - platform: status
+    name: Online
+    id: ink_ha_connected
+  - platform: gpio
+    name:  Limit Triggered
+    id: limit_triggered
+    icon: mdi:connection
+    pin: 
+      number: GPIO10
+      mode:
+        input: true
+        pulldown: True
+    filters:
+      - invert:
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: rgb_light
+    name: "RGB Light"
+    pin: GPIO3
+    rmt_channel: 0
+    default_transition_length: 0s
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: grb
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 1000ms
+          update_interval: 1000ms
+          min_brightness: 0%
+          max_brightness: 100%
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 100ms
+          update_interval: 100ms
+          min_brightness: 50%
+          max_brightness: 100%
+
+button:
+  - platform: restart
+    icon: mdi:power-cycle
+    name: "ESP Reboot"
+
+  - platform: factory_reset
+    disabled_by_default: True
+    name: "Factory Reset ESP"
+    id: factory_reset_all

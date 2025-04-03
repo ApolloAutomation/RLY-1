@@ -10,7 +10,7 @@ esphome:
     name: "ApolloAutomation.RLY-1"
     version: "${version}"
 
-  min_version: 2023.11.1
+  min_version: 2025.2.0
 
 dashboard_import:
   package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1.yaml
@@ -36,7 +36,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: Firmware Update
-    source: https://apolloautomation.github.io/RLY-1/artifact/manifest.json
+    source: https://apolloautomation.github.io/RLY-1/firmware/manifest.json
 
 wifi:
   on_connect:

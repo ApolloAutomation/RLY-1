@@ -9,8 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        file: # TODO: Rename
+        file:
           - Integrations/ESPHome/RLY-1.yaml
+          - Integrations/ESPHome/RLY-1_BLE.yaml
+          - Integrations/ESPHome/RLY-1_Minimal.yaml
+        esphome-version:
+          - stable
+          - beta
+          - dev
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4.1.7

@@ -1,6 +1,6 @@
 substitutions:
   name: apollo-rly-1
-  version: "25.2.19.1"
+  version: "25.2.27.1"
   device_description: ${name} made by Apollo Automation - version ${version}.
 
 esp32:
@@ -19,6 +19,10 @@ globals:
     restore_value: no
     type: uint32_t
     initial_value: '0'
+  - id: runTest
+    restore_value: yes
+    type: bool
+    initial_value: "true"
 
 captive_portal:
 
@@ -33,6 +37,22 @@ switch:
   - platform: gpio
     name: "Relay"
     pin: GPIO4
+    id: relay
+  - platform: factory_reset
+    id: factory_reset_switch
+    internal: true
+    
+  - platform: template
+    name: "Limit Protection"
+    id: limit_protection
+    icon: mdi:shield
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Limit protection enabled"
+    turn_off_action:
+      - logger.log: "Limit protection disabled"
 
 sensor:
   - platform: dallas_temp
@@ -45,7 +65,7 @@ binary_sensor:
     name: Online
     id: ink_ha_connected
   - platform: gpio
-    name:  Limit Triggered
+    name: Limit Triggered
     id: limit_triggered
     icon: mdi:connection
     pin: 
@@ -55,13 +75,49 @@ binary_sensor:
         pulldown: True
     filters:
       - invert:
+    on_state:
+      then:
+        - if:
+            condition:
+              and:
+                - binary_sensor.is_on: limit_triggered
+                - switch.is_on: limit_protection
+            then:
+              - switch.turn_off: relay
+              - logger.log: "Limit triggered - turning off relay"
+  - platform: gpio
+    pin: 
+      number: GPIO9
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: reset_button
+    on_press:
+      then:
+        - lambda: |-
+            id(button_press_timestamp) = millis();    
+    on_release:
+      then:
+        - lambda: |-
+            if (millis() - id(button_press_timestamp) >= 10000) {
+              // Remove Wifi
+              id(runTest) = true;
+              id(factory_reset_switch).turn_on();
+            }
+            else {
+              // StatusCheck
+              id(statusCheck).execute();
+              delay(3000);
+              id(runTest) = true;
+              id(testScript).execute();
+            }
 
 light:
   - platform: esp32_rmt_led_strip
     id: rgb_light
     name: "RGB Light"
     pin: GPIO3
-    rmt_channel: 0
     default_transition_length: 0s
     chipset: WS2812
     num_leds: 1
@@ -85,7 +141,58 @@ button:
     icon: mdi:power-cycle
     name: "ESP Reboot"
 
-  - platform: factory_reset
-    disabled_by_default: True
-    name: "Factory Reset ESP"
-    id: factory_reset_all
+script:
+  - id: statusCheck
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(ink_ha_connected).state;'
+          then:
+            - logger.log: "Apollo Automation: Connected To HA"
+            - light.turn_on: 
+                id: rgb_light
+                brightness: 100%
+                red: 0%
+                green: 0%
+                blue: 100%
+          else:
+            - if:
+                condition:
+                  - wifi.connected
+                then:
+                  - logger.log: "Apollo Automation: Connected To Wifi"
+                  - light.turn_on: 
+                      id: rgb_light
+                      brightness: 100%
+                      red: 0%
+                      green: 100%
+                      blue: 0%
+                else: 
+                  - logger.log: "Apollo Automation: Not Connected To Wifi"
+                  - light.turn_on: 
+                      id: rgb_light
+                      brightness: 100%
+                      red: 100%
+                      green: 100%
+                      blue: 100%  
+
+  - id: testScript
+    then:
+      if: 
+        condition:
+          - lambda: "return id(runTest) == true;"
+        then:
+          - lambda: "id(runTest) = false;"
+          - light.turn_on:
+              id: rgb_light
+              red: 0%
+              green: 100%
+              blue: 0%
+          - delay: 5s
+          - light.turn_on:
+              id: rgb_light
+              red: 0%
+              green: 0%
+              blue: 0%
+          - light.turn_off:
+              id: rgb_light

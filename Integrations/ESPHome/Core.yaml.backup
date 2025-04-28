@@ -1,0 +1,496 @@
+substitutions:
+  name: apollo-rly-1
+  version: "25.2.27.1"
+  device_description: ${name} made by Apollo Automation - version ${version}.
+
+esp32:
+  board: esp32-c6-devkitm-1
+  variant: esp32c6
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    version: 5.3.1
+    platform_version: 6.9.0
+
+# Time component required for total_daily_energy
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+  - platform: sntp
+    id: sntp_time
+    timezone: America/New_York
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+    on_time_sync:
+      then:
+        - logger.log: "Time synchronized with NTP server"
+external_components:
+  - source: github://PhracturedBlue/c6_adc
+    refresh: 0s   # uncomment to force refresh of repo
+api:
+
+globals:
+  # Voltage setting for power calculations - can be adjusted for different regions
+  - id: line_voltage
+    type: float
+    restore_value: yes
+    initial_value: '120.0'
+  # Zero current voltage calibration (default is midpoint)
+  - id: zero_current_voltage
+    type: float
+    restore_value: yes
+    initial_value: '1.6'  # Updated based on your actual reading
+  # Calibration factor for current sensor
+  - id: current_calibration
+    type: float
+    restore_value: yes
+    initial_value: '11.2'  # Based on 9.2A actual / 0.82A reading
+  # Fault detection enabled
+  - id: fault_detection_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'false'  # Default to disabled until properly calibrated
+  - id: cycleCounter
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: button_press_timestamp
+    restore_value: no
+    type: uint32_t
+    initial_value: '0'
+  - id: runTest
+    restore_value: yes
+    type: bool
+    initial_value: "true"
+
+captive_portal:
+
+web_server:
+  port: 80
+
+one_wire:
+  - platform: gpio
+    pin: GPIO15
+
+switch:
+  - platform: gpio
+    name: "Relay"
+    pin: GPIO14
+    id: relay
+  - platform: factory_reset
+    id: factory_reset_switch
+    internal: true
+    
+  - platform: template
+    name: "Limit Protection"
+    id: limit_protection
+    icon: mdi:shield
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Limit protection enabled"
+    turn_off_action:
+      - logger.log: "Limit protection disabled"
+    
+  - platform: template
+    name: "Fault Detection"
+    id: fault_detection
+    icon: mdi:current-ac
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: "config"
+    lambda: 'return id(fault_detection_enabled);'
+    turn_on_action:
+      - logger.log: "Current sensor fault detection enabled"
+      - lambda: 'id(fault_detection_enabled) = true;'
+    turn_off_action:
+      - logger.log: "Current sensor fault detection disabled"
+      - lambda: 'id(fault_detection_enabled) = false;'
+
+sensor:
+  - platform: dallas_temp
+    name: "Temperature Probe"
+    update_interval: 5s
+    id: temp_probe
+    
+  # ACS733KLATR-40AB-T Current Sensor
+  - platform: c6_adc
+    pin: 
+      number: GPIO2
+      allow_multiple: true
+    name: "Current Raw"
+    id: current_raw
+    update_interval: 0.1s  # Faster updates
+    attenuation: 2.5db  # Lower attenuation for better sensitivity
+    accuracy_decimals: 3
+    unit_of_measurement: "V"
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+          
+  # Raw ADC value for debugging
+  - platform: c6_adc
+    pin: 
+      number: GPIO2
+      allow_multiple: true
+    name: "ADC Raw Value"
+    id: adc_raw
+    internal: true
+    update_interval: 0.1s
+    attenuation: 2.5db
+    raw: true
+    
+  - platform: template
+    name: "Current Measurement"
+    id: current_measurement
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 1s
+    filters:
+      - calibrate_linear:
+          # Fine-tune these values after installation for better accuracy
+          - 0.0 -> 0.0  # Offset
+          - 3.0 -> 3.0  # No calibration adjustment initially
+      # Heavy filtering to stabilize readings
+      - sliding_window_moving_average:
+          window_size: 30
+          send_every: 1
+      - exponential_moving_average:
+          alpha: 0.1  # Slower response but more stable readings
+          send_every: 5
+      - throttle: 2s  # Only update every 2 seconds to reduce jumps
+      - filter_out: nan
+    lambda: |-
+      // Expected voltage change for ACS733KLATR-40AB-T is 33mV/A
+      // If we're seeing only 0.1V for 9A, we need to boost our sensitivity calculation
+      
+      // Log diagnostics
+      if (voltage_diff > 0.01 || voltage_diff < -0.01) {
+        ESP_LOGD("current_sensor", "Voltage diff: %.4fV (%.0f ADC counts)", 
+                voltage_diff, id(adc_raw).state);
+      }
+      
+      // Apply enhanced calibration factor based on low voltage change
+      // Calibration chain: theoretical 33mV/A sensitivity, then calibration factor
+      float expected_voltage_diff = 9.0 * 0.033; // 9A should give about 0.297V change
+      float observed_voltage_diff = 0.1; // User observed 0.1V for 9A
+      float voltage_multiplier = expected_voltage_diff / observed_voltage_diff; // ~2.97x
+      
+      // Calculate current: voltage_diff * voltage_multiplier / theoretical_sensitivity
+      float current = voltage_diff * voltage_multiplier / 0.033;
+      
+      // Apply calibration factor from user interface
+      current = current * id(current_calibration) / 11.2; // Normalize to the initial calibration
+      
+      // Apply a deadband to eliminate noise when no current is flowing
+      if (fabs(current) < 0.2) {
+        return 0.0;
+      }
+      
+      // Log significant current readings
+      if (fabs(current) > 0.5) {
+        ESP_LOGI("current_sensor", "Current: %.2fA (V_diff: %.4fV, multiplier: %.1fx)", 
+                current, voltage_diff, voltage_multiplier * id(current_calibration) / 11.2);
+      }
+      
+      return current;
+  
+  # Power calculation (assuming 120V AC)
+  - platform: template
+    name: "Power Usage"
+    id: power_usage
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 1s
+    lambda: |-
+      // Always return positive power values
+      float current = fabs(id(current_measurement).state);
+      if (current > 0.1) {  // Only calculate power when current is significant
+        return current * id(line_voltage);
+      } else {
+        return 0.0;
+      }
+      
+  # Energy monitoring
+  - platform: total_daily_energy
+    name: "Daily Energy"
+    power_id: power_usage
+    filters:
+      - multiply: 0.001  # Convert to kWh
+    unit_of_measurement: kWh
+    device_class: energy
+    time_id: sntp_time     # Use the time component we added
+
+binary_sensor:
+  - platform: status
+    name: Online
+    id: ink_ha_connected
+  - platform: gpio
+    name: Limit Triggered
+    id: limit_triggered
+    icon: mdi:connection
+    pin: 
+      number: GPIO5
+      mode:
+        input: true
+        pulldown: True
+    filters:
+      - invert:
+    on_state:
+      then:
+        - if:
+            condition:
+              and:
+                - binary_sensor.is_on: limit_triggered
+                - switch.is_on: limit_protection
+            then:
+              - switch.turn_off: relay
+              - logger.log: "Limit triggered - turning off relay"
+  # ACS733 Fault Pin
+  - platform: gpio
+    pin:
+      number: GPIO6
+      mode:
+        input: true
+        pullup: true
+      inverted: true  # Invert the signal since fault is active LOW
+    name: "Current Sensor Fault"
+    id: current_sensor_fault
+    device_class: problem
+    filters:
+      - delayed_on: 100ms  # Add debounce to prevent false positives
+      - delayed_off: 100ms
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(fault_detection_enabled);'
+            then:
+              - logger.log: "Current sensor fault detected!"
+              # Turn off relay for safety when a fault is detected
+              - switch.turn_off: relay
+              - light.turn_on:
+                  id: rgb_light
+                  brightness: 100%
+                  red: 100%
+                  green: 0%
+                  blue: 0%
+                  flash_length: 500ms
+    
+  - platform: gpio
+    pin:
+      number: GPIO9
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: reset_button
+    on_press:
+      then:
+        - lambda: |-
+            id(button_press_timestamp) = millis();    
+    on_release:
+      then:
+        - lambda: |-
+            if (millis() - id(button_press_timestamp) >= 10000) {
+              // Remove Wifi
+              id(runTest) = true;
+              id(factory_reset_switch).turn_on();
+            }
+            else {
+              // StatusCheck
+              id(statusCheck).execute();
+              delay(3000);
+              id(runTest) = true;
+              id(testScript).execute();
+            }
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: rgb_light
+    name: "RGB Light"
+    pin: GPIO3
+    default_transition_length: 0s
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: grb
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 1000ms
+          update_interval: 1000ms
+          min_brightness: 0%
+          max_brightness: 100%
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 100ms
+          update_interval: 100ms
+          min_brightness: 50%
+          max_brightness: 100%
+
+button:
+  - platform: restart
+    icon: mdi:power-cycle
+    name: "ESP Reboot"
+    
+  - platform: template
+    name: "Calibrate Current Sensor"
+    icon: mdi:scale-balance
+    entity_category: "config"
+    on_press:
+      - script.execute: zero_calibration
+
+number:
+  - platform: template
+    name: "Current Calibration Factor"
+    id: current_calibration_control
+    icon: mdi:sine-wave
+    min_value: 1.0
+    max_value: 20.0
+    step: 0.1
+    entity_category: "config"
+    mode: box
+    unit_of_measurement: "x"
+    set_action:
+      - lambda: 'id(current_calibration) = x;'
+    update_interval: 60s
+    lambda: 'return id(current_calibration);'
+
+text_sensor:
+  - platform: template
+    name: "Current Sensor Info"
+    id: current_sensor_info
+    icon: mdi:information
+    entity_category: "diagnostic"
+    update_interval: 60s
+    lambda: |-
+      // Calculate voltage change per amp based on measurements
+      float expected_voltage_diff = 9.0 * 0.033; // 9A should give about 0.297V change
+      float observed_voltage_diff = 0.1; // User observed 0.1V for 9A
+      float voltage_multiplier = expected_voltage_diff / observed_voltage_diff; // ~2.97x
+      float effective_sensitivity = 0.033 / (voltage_multiplier * id(current_calibration) / 11.2);
+      
+      char buffer[128];
+      snprintf(buffer, sizeof(buffer), 
+        "Zero: %.3fV, Cal: %.1fx, Sens: %.2fmV/A, ADC: %.0f", 
+        id(zero_current_voltage),
+        id(current_calibration),
+        effective_sensitivity * 1000, // Convert to mV/A
+        id(adc_raw).state);
+      return {buffer};
+
+script:
+  - id: statusCheck
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(ink_ha_connected).state;'
+          then:
+            - logger.log: "Apollo Automation: Connected To HA"
+            - light.turn_on: 
+                id: rgb_light
+                brightness: 100%
+                red: 0%
+                green: 0%
+                blue: 100%
+          else:
+            - if:
+                condition:
+                  - wifi.connected
+                then:
+                  - logger.log: "Apollo Automation: Connected To Wifi"
+                  - light.turn_on: 
+                      id: rgb_light
+                      brightness: 100%
+                      red: 0%
+                      green: 100%
+                      blue: 0%
+                else: 
+                  - logger.log: "Apollo Automation: Not Connected To Wifi"
+                  - light.turn_on: 
+                      id: rgb_light
+                      brightness: 100%
+                      red: 100%
+                      green: 100%
+                      blue: 100%  
+
+  - id: testScript
+    then:
+      if: 
+        condition:
+          - lambda: "return id(runTest) == true;"
+        then:
+          - lambda: "id(runTest) = false;"
+          - light.turn_on:
+              id: rgb_light
+              red: 0%
+              green: 100%
+              blue: 0%
+          - delay: 5s
+          - light.turn_on:
+              id: rgb_light
+              red: 0%
+              green: 0%
+              blue: 0%
+          - light.turn_off:
+              id: rgb_light
+              
+  - id: zero_calibration
+    then:
+      - logger.log: "Performing current sensor zero calibration..."
+      
+      # Turn fault detection off temporarily during calibration
+      - lambda: 'id(fault_detection_enabled) = false;'
+      
+      # Flash to indicate calibration in progress
+      - light.turn_on:
+          id: rgb_light
+          brightness: 100%
+          red: 0%
+          green: 0%
+          blue: 100%
+      
+      # Wait for readings to stabilize
+      - delay: 1s
+      
+      # Get multiple readings and average them for more accuracy
+      - lambda: |-
+          float sum = 0.0;
+          int samples = 20;
+          
+          // Take multiple samples and average them
+          for(int i = 0; i < samples; i++) {
+            sum += id(current_raw).state;
+            delay(50);
+          }
+          
+          float adc_voltage = sum / samples;
+          ESP_LOGI("current_sensor", "Zero current voltage: %.3fV (ADC raw: %.0f)",
+                  adc_voltage, id(adc_raw).state);
+          
+          // Update the global variable with the new zero point
+          id(zero_current_voltage) = adc_voltage;
+          
+          // Note: Calibration factor can be adjusted in Home Assistant
+          // by updating the current_calibration entity
+          
+          return;
+      
+      - logger.log: "Zero calibration completed. New reference: ${zero_current_voltage}V"
+      
+      # Flash green to indicate success
+      - light.turn_on:
+          id: rgb_light
+          brightness: 100%
+          red: 0%
+          green: 100%
+          blue: 0%
+          flash_length: 500ms

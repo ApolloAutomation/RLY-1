@@ -37,6 +37,7 @@ globals:
     type: float
     restore_value: yes
     initial_value: '120.0'
+
   - id: cycleCounter
     type: int
     restore_value: no
@@ -85,73 +86,21 @@ sensor:
     name: "Temperature Probe"
     update_interval: 5s
     id: temp_probe
-    
-  # ACS733KLATR-40AB-T Current Sensor
   - platform: c6_adc
     pin: GPIO2
-    name: "Current Raw"
-    id: current_raw
+    name: "Raw ADC"
     update_interval: 1s
     attenuation: 12db
-    internal: true
-    
-  - platform: template
-    name: "Current Measurement"
-    id: current_measurement
-    unit_of_measurement: "A"
-    device_class: current
-    state_class: measurement
-    accuracy_decimals: 2
-    update_interval: 1s
     filters:
-      - calibrate_linear:
-          # Fine-tune these values after installation for better accuracy
-          - 0.0 -> 0.0  # Offset
-          - 3.0 -> 3.0  # No calibration adjustment initially
       - sliding_window_moving_average:
-          window_size: 10
+          window_size: 15
+          send_every: 10
+      - median:
+          window_size: 7
+          send_every: 5
+      - exponential_moving_average:
+          alpha: 0.1
           send_every: 1
-      - filter_out: nan
-    lambda: |-
-      // Convert ADC reading to current
-      // For ACS733KLATR-40AB-T:
-      // - Zero current is at VCC/2 (typically 1.65V for 3.3V VCC)
-      // - Sensitivity is 33 mV/A for the 40AB variant
-      // - Measurement range is ±40A
-      
-      float adc_voltage = id(current_raw).state * 3.3 / 4095.0; // Convert to voltage (for 12-bit ADC and 3.3V reference)
-      float zero_current_voltage = 3.3 / 2.0; // Midpoint voltage (zero current)
-      float sensitivity = 0.033; // 33 mV/A for the 40AB variant
-      
-      // Calculate current in Amperes
-      return (adc_voltage - zero_current_voltage) / sensitivity;
-  
-  # Power calculation (assuming 120V AC)
-  - platform: template
-    name: "Power Usage"
-    id: power_usage
-    unit_of_measurement: "W"
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 1
-    update_interval: 1s
-    lambda: |-
-      if (id(current_measurement).state > 0) {
-        // Use configurable line voltage for calculation
-        return id(current_measurement).state * id(line_voltage);
-      } else {
-        return 0.0;
-      }
-      
-  # Energy monitoring
-  - platform: total_daily_energy
-    name: "Daily Energy"
-    power_id: power_usage
-    filters:
-      - multiply: 0.001  # Convert to kWh
-    unit_of_measurement: kWh
-    device_class: energy
-    time_id: sntp_time     # Use the time component we added
 
 binary_sensor:
   - platform: status
@@ -178,21 +127,7 @@ binary_sensor:
             then:
               - switch.turn_off: relay
               - logger.log: "Limit triggered - turning off relay"
-  # ACS733 Fault Pin
-  - platform: gpio
-    pin:
-      number: GPIO6
-      mode:
-        input: true
-        pullup: true
-    name: "Current Sensor Fault"
-    id: current_sensor_fault
-    device_class: problem
-    on_press:
-      then:
-        - logger.log: "Current sensor fault detected!"
-        # Optional: Turn off relay for safety if there's a fault
-        # - switch.turn_off: relay
+  
     
   - platform: gpio
     pin:
@@ -250,11 +185,6 @@ button:
     icon: mdi:power-cycle
     name: "ESP Reboot"
     
-  - platform: template
-    name: "Calibrate Current Sensor"
-    icon: mdi:scale-balance
-    on_press:
-      - script.execute: zero_calibration
 
 script:
   - id: statusCheck
@@ -312,12 +242,4 @@ script:
           - light.turn_off:
               id: rgb_light
               
-  - id: zero_calibration
-    then:
-      - logger.log: "Performing current sensor zero calibration..."
-      - lambda: |-
-          // Store current zero-current voltage reading for calibration
-          // This should be done when no current is flowing through the sensor
-          float adc_voltage = id(current_raw).state * 3.3 / 4095.0;
-          ESP_LOGI("current_sensor", "Zero current voltage: %.3fV", adc_voltage);
-      - logger.log: "Zero calibration completed. Check logs for values."
+  

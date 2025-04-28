@@ -1,5 +1,5 @@
 esphome:
-  name: "${name}"
+  name: "apollo-rly-1"
   friendly_name: Apollo RLY-1
   comment: Apollo RLY-1
   name_add_mac_suffix: true
@@ -13,13 +13,13 @@ esphome:
   min_version: 2025.2.0
 
 dashboard_import:
-  package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1.yaml
+  package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1_Minimal.yaml
   import_full_config: false
 
-improv_serial:
+#improv_serial:
 
-esp32_improv:
-  authorizer: none
+#esp32_improv:
+#  authorizer: none
 
 ota:
   - platform: esphome
@@ -32,6 +32,9 @@ http_request:
 
 safe_mode:
 
+web_server:
+  port: 80
+
 update:
   - platform: http_request
     id: firmware_update
@@ -39,11 +42,12 @@ update:
     source: https://apolloautomation.github.io/RLY-1/firmware/manifest.json
 
 wifi:
-  on_connect:
-    - delay: 5s
-    - ble.disable:
-  on_disconnect:
-    - ble.enable:
+  #id: wifi_1
+  #on_connect:
+  #  - delay: 5s
+  #  - ble.disable:
+  #on_disconnect:
+  #  - ble.enable:
   ap:
     ssid: "Apollo RLY1 Hotspot"
 

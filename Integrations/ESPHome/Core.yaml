@@ -1,16 +1,43 @@
 substitutions:
   name: apollo-rly-1
-  version: "25.2.27.1"
+  version: "25.4.28.1"
   device_description: ${name} made by Apollo Automation - version ${version}.
 
 esp32:
-  board: esp32-c3-devkitm-1
+  board: esp32-c6-devkitm-1
+  variant: esp32c6
+  #flash_size: 8MB
   framework:
     type: esp-idf
+    version: 5.3.1
+    platform_version: 6.9.0
 
+# Time component required for total_daily_energy
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+  - platform: sntp
+    id: sntp_time
+    timezone: America/New_York
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+    on_time_sync:
+      then:
+        - logger.log: "Time synchronized with NTP server"
+external_components:
+  - source: github://PhracturedBlue/c6_adc
+    refresh: 0s   # uncomment to force refresh of repo
 api:
 
 globals:
+  # Voltage setting for power calculations - can be adjusted for different regions
+  - id: line_voltage
+    type: float
+    restore_value: yes
+    initial_value: '120.0'
+
   - id: cycleCounter
     type: int
     restore_value: no
@@ -31,12 +58,12 @@ web_server:
 
 one_wire:
   - platform: gpio
-    pin: GPIO5
+    pin: GPIO15
 
 switch:
   - platform: gpio
     name: "Relay"
-    pin: GPIO4
+    pin: GPIO14
     id: relay
   - platform: factory_reset
     id: factory_reset_switch
@@ -59,6 +86,21 @@ sensor:
     name: "Temperature Probe"
     update_interval: 5s
     id: temp_probe
+  - platform: c6_adc
+    pin: GPIO2
+    name: "Raw ADC"
+    update_interval: 1s
+    attenuation: 12db
+    filters:
+      - sliding_window_moving_average:
+          window_size: 15
+          send_every: 10
+      - median:
+          window_size: 7
+          send_every: 5
+      - exponential_moving_average:
+          alpha: 0.1
+          send_every: 1
 
 binary_sensor:
   - platform: status
@@ -69,7 +111,7 @@ binary_sensor:
     id: limit_triggered
     icon: mdi:connection
     pin: 
-      number: GPIO10
+      number: GPIO5
       mode:
         input: true
         pulldown: True
@@ -85,8 +127,10 @@ binary_sensor:
             then:
               - switch.turn_off: relay
               - logger.log: "Limit triggered - turning off relay"
+  
+    
   - platform: gpio
-    pin: 
+    pin:
       number: GPIO9
       inverted: true
       mode:
@@ -140,6 +184,7 @@ button:
   - platform: restart
     icon: mdi:power-cycle
     name: "ESP Reboot"
+    
 
 script:
   - id: statusCheck
@@ -196,3 +241,5 @@ script:
               blue: 0%
           - light.turn_off:
               id: rgb_light
+              
+  

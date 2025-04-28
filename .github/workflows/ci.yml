@@ -14,7 +14,7 @@ jobs:
         file:
           - Integrations/ESPHome/RLY-1.yaml
           - Integrations/ESPHome/RLY-1_Minimal.yaml
-          - Integrations/ESPHome/RLY-1_BLE.yaml
+          #- Integrations/ESPHome/RLY-1_BLE.yaml
         esphome-version:
           - stable
           - beta

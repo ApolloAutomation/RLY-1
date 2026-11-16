@@ -37,8 +37,11 @@ esp32:
   #flash_size: 8MB
   framework:
     type: esp-idf
-    version: 5.3.1
-    platform_version: 6.9.0
+    # Drops assert strings so the Bluetooth proxy + managed-update image fits
+    # the default 4 MB app partition (same settings as PLT-1 / TEMP-1).
+    advanced:
+      assertion_level: SILENT
+      enable_lwip_assert: false
 
 # Time component required for total_daily_energy
 time:
@@ -54,10 +57,6 @@ time:
     on_time_sync:
       then:
         - logger.log: "Time synchronized with NTP server"
-external_components:
-  - source: github://PhracturedBlue/c6_adc
-    refresh: 0s   # uncomment to force refresh of repo
-
 esp32_ble_tracker:
   id: ble_tracker
   scan_parameters:
@@ -147,7 +146,7 @@ sensor:
     name: "Temperature Probe"
     update_interval: 5s
     id: temp_probe
-  - platform: c6_adc
+  - platform: adc
     pin: GPIO2
     name: "Raw ADC"
     update_interval: 1s

@@ -60,7 +60,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: Firmware Update
-    source: https://apolloautomation.github.io/RLY-1/firmware/manifest.json
+    source: ${ota_stable_manifest}
 
 select:
   - platform: template

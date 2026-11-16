@@ -1,6 +1,6 @@
 substitutions:
   name: apollo-rly-1
-  version: "26.11.15.1"
+  version: "26.11.16.1"
   device_description: ${name} made by Apollo Automation - version ${version}.
 
   # Bluetooth Proxy switch state on a device with no stored preference yet
@@ -203,23 +203,28 @@ binary_sensor:
             id(button_press_timestamp) = millis();    
     on_release:
       then:
-        - lambda: |-
-            if (millis() - id(button_press_timestamp) >= 10000) {
-              // Remove Wifi
-              id(runTest) = true;
-              id(factory_reset_switch).turn_on();
-            }
-            else if (millis() - id(button_press_timestamp) >= 3000) {
-              // Mains powered: no Prevent Sleep, so a 3-10 s hold does nothing
-            }
-            else {
-              // StatusCheck
-              id(statusCheck).execute();
-              delay(3000);
-              id(testCycleCount) = 0;
-              id(runTest) = true;
-              id(testScript).execute();
-            }
+        - if:
+            condition:
+              lambda: "return millis() - id(button_press_timestamp) >= 10000;"
+            then:
+              # Remove Wifi
+              - lambda: "id(runTest) = true;"
+              - switch.turn_on: factory_reset_switch
+            else:
+              # Mains powered: no Prevent Sleep, so a 3-10 s hold does nothing
+              - if:
+                  condition:
+                    lambda: "return millis() - id(button_press_timestamp) < 3000;"
+                  then:
+                    - script.execute: statusCheck
+                    - script.wait: statusCheck
+                    # Non-blocking, so the main loop keeps running and the
+                    # status colour stays visible before the test turns it green
+                    - delay: 3s
+                    - lambda: |-
+                        id(testCycleCount) = 0;
+                        id(runTest) = true;
+                    - script.execute: testScript
 
 light:
   - platform: esp32_rmt_led_strip

@@ -10,7 +10,8 @@ esphome:
     name: "ApolloAutomation.RLY-1-Minimal"
     version: "${version}"
 
-  min_version: 2025.2.0
+  # Fleet minimum: improv_ble (renamed from esp32_improv) needs 2026.10
+  min_version: 2026.10.0
 
 dashboard_import:
   package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1_Minimal.yaml
@@ -26,6 +27,8 @@ web_server:
   port: 80
 
 wifi:
+  # Keeps today's no-reboot on lost Wi-Fi; 2026.11 drops the AP exemption
+  reboot_timeout: 0s
   id: wifi_1
   ap:
     ssid: "Apollo RLY1 Hotspot"

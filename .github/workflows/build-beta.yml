@@ -1,0 +1,27 @@
+name: Build and Publish Beta
+
+on:
+  push:
+    branches: [beta]
+    paths:
+      - 'Integrations/ESPHome/**'
+      # A push that only changes this file must rebuild too
+      - '.github/workflows/build-beta.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-beta-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  beta:
+    permissions:
+      contents: write
+    uses: ApolloAutomation/Workflows/.github/workflows/build-beta.yml@main
+    with:
+      # Devices on the Beta channel fetch manifest-standard.json (RLY-1.yaml ota_beta_manifest)
+      variants: >-
+        [{"key": "standard", "yaml": "Integrations/ESPHome/RLY-1.yaml", "name": "firmware-standard"}]

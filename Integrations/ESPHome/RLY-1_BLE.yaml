@@ -1,3 +1,8 @@
+substitutions:
+  # This variant always proxied; keep the proxy on for devices with no stored
+  # Bluetooth Proxy switch state so updating doesn't silently drop it.
+  bluetooth_proxy_restore_mode: RESTORE_DEFAULT_ON
+
 esphome:
   name: "${name}"
   friendly_name: Apollo RLY-1
@@ -10,7 +15,8 @@ esphome:
     name: "ApolloAutomation.RLY-1_BLE"
     version: "${version}"
 
-  min_version: 2025.2.0
+  # Fleet minimum: improv_ble (renamed from esp32_improv) needs 2026.10
+  min_version: 2026.10.0
 
 dashboard_import:
   package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1_BLE.yaml
@@ -22,6 +28,14 @@ ota:
 
 http_request:
   verify_ssl: true
+  # GitHub release-asset downloads answer with a redirect carrying a
+  # ~3.6 KB Content-Security-Policy header; each header line must fit
+  # this buffer or the request fails with "HTTP_CLIENT: Out of buffer".
+  buffer_size_rx: 5120
+  # The redirect target is a signed URL with a ~850-char query string; the
+  # follow-up request line must fit the TX buffer or esp_http_client_open
+  # fails with "Out of buffer" before sending anything.
+  buffer_size_tx: 2048
 
 safe_mode:
 
@@ -32,6 +46,8 @@ esp32_ble_tracker:
     active: false
 
 wifi:
+  # Keeps today's no-reboot on lost Wi-Fi; 2026.11 drops the AP exemption
+  reboot_timeout: 0s
   ap:
     ssid: "Apollo RLY1 Hotspot"
 

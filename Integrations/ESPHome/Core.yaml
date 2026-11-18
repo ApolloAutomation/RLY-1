@@ -1,7 +1,35 @@
 substitutions:
   name: apollo-rly-1
-  version: "25.4.28.1"
+  version: "26.11.17.1"
   device_description: ${name} made by Apollo Automation - version ${version}.
+
+  # Bluetooth Proxy switch state on a device with no stored preference yet
+  # (first boot after this switch was added, or after a factory reset).
+  # RLY-1_BLE.yaml overrides this to ON so devices that always proxied keep
+  # proxying instead of going quiet after an update.
+  bluetooth_proxy_restore_mode: RESTORE_DEFAULT_OFF
+
+esphome:
+  # List form so package merging concatenates with each variant's own on_boot
+  # entries (mapping form would be replaced by the variant's block instead).
+  on_boot:
+    - priority: -100
+      then:
+        - text_sensor.template.publish:
+            id: apollo_firmware_version
+            state: "${version}"
+    # Re-apply the Bluetooth Proxy switch after all components set up, so BLE
+    # scanning matches the switch state restored from flash.
+    - priority: -300
+      then:
+        - if:
+            condition:
+              switch.is_on: bluetooth_proxy_switch
+            then:
+              - esp32_ble_tracker.start_scan:
+                  continuous: true
+            else:
+              - esp32_ble_tracker.stop_scan:
 
 esp32:
   board: esp32-c6-devkitm-1
@@ -9,8 +37,11 @@ esp32:
   #flash_size: 8MB
   framework:
     type: esp-idf
-    version: 5.3.1
-    platform_version: 6.9.0
+    # Drops assert strings so the Bluetooth proxy + managed-update image fits
+    # the default 4 MB app partition (same settings as PLT-1 / TEMP-1).
+    advanced:
+      assertion_level: SILENT
+      enable_lwip_assert: false
 
 # Time component required for total_daily_energy
 time:
@@ -26,10 +57,15 @@ time:
     on_time_sync:
       then:
         - logger.log: "Time synchronized with NTP server"
-external_components:
-  - source: github://PhracturedBlue/c6_adc
-    refresh: 0s   # uncomment to force refresh of repo
+esp32_ble_tracker:
+  id: ble_tracker
+  scan_parameters:
+    continuous: true
+
+bluetooth_proxy:
+
 api:
+  encryption:
 
 globals:
   # Voltage setting for power calculations - can be adjusted for different regions
@@ -50,6 +86,10 @@ globals:
     restore_value: yes
     type: bool
     initial_value: "true"
+  - id: testCycleCount
+    type: int
+    restore_value: no
+    initial_value: "0"
 
 captive_portal:
 
@@ -81,12 +121,32 @@ switch:
     turn_off_action:
       - logger.log: "Limit protection disabled"
 
+  - platform: template
+    name: "Bluetooth Proxy"
+    id: bluetooth_proxy_switch
+    icon: mdi:bluetooth
+    entity_category: "config"
+    restore_mode: ${bluetooth_proxy_restore_mode}
+    optimistic: true
+    on_turn_on:
+      - esp32_ble_tracker.start_scan:
+          continuous: true
+    on_turn_off:
+      - esp32_ble_tracker.stop_scan:
+
+text_sensor:
+  - platform: template
+    name: "Apollo Firmware Version"
+    id: apollo_firmware_version
+    update_interval: never
+    entity_category: "diagnostic"
+
 sensor:
   - platform: dallas_temp
     name: "Temperature Probe"
     update_interval: 5s
     id: temp_probe
-  - platform: c6_adc
+  - platform: adc
     pin: GPIO2
     name: "Raw ADC"
     update_interval: 1s
@@ -143,19 +203,28 @@ binary_sensor:
             id(button_press_timestamp) = millis();    
     on_release:
       then:
-        - lambda: |-
-            if (millis() - id(button_press_timestamp) >= 10000) {
-              // Remove Wifi
-              id(runTest) = true;
-              id(factory_reset_switch).turn_on();
-            }
-            else {
-              // StatusCheck
-              id(statusCheck).execute();
-              delay(3000);
-              id(runTest) = true;
-              id(testScript).execute();
-            }
+        - if:
+            condition:
+              lambda: "return millis() - id(button_press_timestamp) >= 10000;"
+            then:
+              # Remove Wifi
+              - lambda: "id(runTest) = true;"
+              - switch.turn_on: factory_reset_switch
+            else:
+              # Mains powered: no Prevent Sleep, so a 3-10 s hold does nothing
+              - if:
+                  condition:
+                    lambda: "return millis() - id(button_press_timestamp) < 3000;"
+                  then:
+                    - script.execute: statusCheck
+                    - script.wait: statusCheck
+                    # Non-blocking, so the main loop keeps running and the
+                    # status colour stays visible before the test turns it green
+                    - delay: 3s
+                    - lambda: |-
+                        id(testCycleCount) = 0;
+                        id(runTest) = true;
+                    - script.execute: testScript
 
 light:
   - platform: esp32_rmt_led_strip
@@ -165,7 +234,7 @@ light:
     default_transition_length: 0s
     chipset: WS2812
     num_leds: 1
-    rgb_order: grb
+    channel_colors: GRB
     effects:
       - pulse:
           name: "Slow Pulse"

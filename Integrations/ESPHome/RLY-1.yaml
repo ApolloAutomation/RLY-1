@@ -1,3 +1,11 @@
+substitutions:
+  # Manifest URL bases. Stable = GitHub Pages (main branch builds).
+  # Beta = rolling "beta-fw" pre-release assets (beta branch builds).
+  stable_manifest_base: "https://apolloautomation.github.io/RLY-1"
+  beta_manifest_base: "https://github.com/ApolloAutomation/RLY-1/releases/download/beta-fw"
+  ota_stable_manifest: "${stable_manifest_base}/firmware/manifest.json"
+  ota_beta_manifest: "${beta_manifest_base}/manifest-standard.json"
+
 esphome:
   name: "apollo-rly-1"
   friendly_name: Apollo RLY-1
@@ -10,16 +18,21 @@ esphome:
     name: "ApolloAutomation.RLY-1"
     version: "${version}"
 
-  min_version: 2025.2.0
+  # improv_ble (renamed from esp32_improv) needs 2026.10
+  min_version: 2026.10.1
+  on_boot:
+    - priority: -100
+      then:
+        - script.execute: apply_ota_source
 
 dashboard_import:
   package_import_url: github://ApolloAutomation/RLY-1/Integrations/ESPHome/RLY-1_Minimal.yaml
   import_full_config: false
 
-#improv_serial:
+improv_serial:
 
-#esp32_improv:
-#  authorizer: none
+improv_ble:
+  authorizer: none
 
 ota:
   - platform: esphome
@@ -29,6 +42,14 @@ ota:
 
 http_request:
   verify_ssl: true
+  # GitHub release-asset downloads answer with a redirect carrying a
+  # ~3.6 KB Content-Security-Policy header; each header line must fit
+  # this buffer or the request fails with "HTTP_CLIENT: Out of buffer".
+  buffer_size_rx: 5120
+  # The redirect target is a signed URL with a ~850-char query string; the
+  # follow-up request line must fit the TX buffer or esp_http_client_open
+  # fails with "Out of buffer" before sending anything.
+  buffer_size_tx: 2048
 
 safe_mode:
 
@@ -39,15 +60,103 @@ update:
   - platform: http_request
     id: firmware_update
     name: Firmware Update
-    source: https://apolloautomation.github.io/RLY-1/firmware/manifest.json
+    source: ${ota_stable_manifest}
+
+select:
+  - platform: template
+    name: "Firmware Channel"
+    id: firmware_channel
+    icon: mdi:source-branch
+    entity_category: "config"
+    optimistic: true
+    restore_value: true
+    options:
+      - "Stable"
+      - "Beta"
+    initial_option: "Stable"
+    on_value:
+      then:
+        - script.execute: apply_ota_source
+
+button:
+  - platform: template
+    name: "Firmware Update"
+    id: update_firmware
+    icon: mdi:cloud-download
+    entity_category: "config"
+    on_press:
+      - logger.log: "Applying firmware update for the selected channel"
+      - script.execute: install_selected_channel
+
+script:
+  # The update component drops a check requested while another one is running,
+  # so keep asking until install_selected_channel has what it needs.
+  - id: request_channel_manifest
+    mode: restart
+    then:
+      - repeat:
+          count: 4
+          then:
+            - script.execute: apply_ota_source
+            - script.wait: apply_ota_source
+            - delay: 5s
+
+  # Forced install, but only of a manifest fetched after this press from the
+  # selected channel. mode single: a second press while this runs is ignored.
+  - id: install_selected_channel
+    mode: single
+    then:
+      # Mark the cached firmware URL as old. Only a successful check replaces it.
+      - lambda: |-
+          std::string &fw = const_cast<std::string &>(id(firmware_update).update_info.firmware_url);
+          if (fw.rfind('!', 0) != 0) fw.insert(0, "!");
+      - script.execute: request_channel_manifest
+      # Wait for a check without error whose firmware sits in the directory of
+      # the selected channel's manifest (relative Pages paths are merged with
+      # it, beta paths are release-asset URLs in the same directory).
+      - wait_until:
+          timeout: 20s
+          condition:
+            lambda: |-
+              const char *src = id(firmware_update).get_source_url();
+              const size_t dir = strrchr(src, '/') - src + 1;
+              return !id(firmware_update).status_has_error() &&
+                     strncmp(id(firmware_update).update_info.firmware_url.c_str(), src, dir) == 0;
+      - script.stop: request_channel_manifest
+      - lambda: |-
+          std::string &fw = const_cast<std::string &>(id(firmware_update).update_info.firmware_url);
+          const char *src = id(firmware_update).get_source_url();
+          const size_t dir = strrchr(src, '/') - src + 1;
+          const bool err = id(firmware_update).status_has_error();
+          const char *why = nullptr;
+          if (fw.rfind('!', 0) == 0) {
+            why = err ? "the manifest check failed" : "no manifest arrived within 20s";
+            fw.erase(0, 1);  // put the old URL back for the update entity
+          } else if (err || strncmp(fw.c_str(), src, dir) != 0) {
+            why = "the manifest that arrived is not from the selected channel";
+          }
+          if (why != nullptr) {
+            ESP_LOGW("firmware", "Firmware Update: %s (%s); not installing", why, src);
+            return;
+          }
+          ESP_LOGI("firmware", "Installing %s", fw.c_str());
+          id(firmware_update).perform(true);
+
+  - id: apply_ota_source
+    # Sets the OTA manifest URL from the Firmware Channel select (Stable/Beta).
+    then:
+      - lambda: |-
+          const bool beta = id(firmware_channel).current_option() == "Beta";
+          const char *url = beta ? "${ota_beta_manifest}" : "${ota_stable_manifest}";
+          ESP_LOGI("firmware", "OTA manifest set to: %s", url);
+          id(firmware_update).set_source_url(url);
+      - component.update: firmware_update
 
 wifi:
-  #id: wifi_1
-  #on_connect:
-  #  - delay: 5s
-  #  - ble.disable:
-  #on_disconnect:
-  #  - ble.enable:
+  on_connect:
+    - component.update: firmware_update
+  # Keeps today's no-reboot on lost Wi-Fi; 2026.11 drops the AP exemption
+  reboot_timeout: 0s
   ap:
     ssid: "Apollo RLY1 Hotspot"
 

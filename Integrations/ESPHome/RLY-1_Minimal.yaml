@@ -25,8 +25,6 @@ safe_mode:
 
 web_server:
   port: 80
-  # No firmware upload from the device page; the setup hotspot still allows it
-  ota: false
 
 wifi:
   # Keeps today's no-reboot on lost Wi-Fi; 2026.11 drops the AP exemption
